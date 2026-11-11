@@ -13,7 +13,10 @@ export default {
     };
 
     if (origin && origin !== ALLOWED_ORIGIN) {
-      return new Response("Not allowed", { status: 403 });
+      return new Response(
+        JSON.stringify({ error: "Not allowed" }),
+        { status: 403, headers }
+      );
     }
 
     if (request.method === "OPTIONS") {
@@ -28,35 +31,58 @@ export default {
     }
 
     try {
-      if (!env.OPENROUTER_API_KEY) {
-        throw new Error("API key is not configured");
-      }
-
       const body = await request.json();
 
-      if (!Array.isArray(body.messages)) {
+      if (!Array.isArray(body.messages) || body.messages.length === 0) {
         return new Response(
           JSON.stringify({ error: "Messages are required" }),
           { status: 400, headers }
         );
       }
 
-      const response = await fetch(
-        "https://openrouter.ai/api/v1/chat/completions",
-        {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${env.OPENROUTER_API_KEY}`,
-            "Content-Type": "application/json",
+      const provider = (env.AI_PROVIDER || "groq").toLowerCase();
+
+      let apiUrl;
+      let apiKey;
+      let model;
+
+      if (provider === "groq") {
+        apiUrl = "https://api.groq.com/openai/v1/chat/completions";
+        apiKey = env.GROQ_API_KEY;
+        model = env.GROQ_MODEL || "openai/gpt-oss-20b";
+      } else if (provider === "openrouter") {
+        apiUrl = "https://openrouter.ai/api/v1/chat/completions";
+        apiKey = env.OPENROUTER_API_KEY;
+        model = env.OPENROUTER_MODEL || "openrouter/free";
+      } else {
+        return new Response(
+          JSON.stringify({ error: "Unsupported AI provider" }),
+          { status: 400, headers }
+        );
+      }
+
+      if (!apiKey) {
+        return new Response(
+          JSON.stringify({ error: provider + " API key is not configured" }),
+          { status: 500, headers }
+        );
+      }
+
+      const response = await fetch(apiUrl, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          ...(provider === "openrouter" ? {
             "HTTP-Referer": ALLOWED_ORIGIN,
             "X-Title": "VikasChatGptAi"
-          },
-          body: JSON.stringify({
-            model: "openrouter/free",
-            messages: body.messages
-          })
-        }
-      );
+          } : {})
+        },
+        body: JSON.stringify({
+          model,
+          messages: body.messages
+        })
+      });
 
       const result = await response.text();
 
@@ -67,10 +93,9 @@ export default {
 
     } catch (error) {
       return new Response(
-        JSON.stringify({ error: error.message }),
+        JSON.stringify({ error: error.message || "Internal server error" }),
         { status: 500, headers }
       );
     }
   }
 };
-// First Cloudflare GitHub deployment
